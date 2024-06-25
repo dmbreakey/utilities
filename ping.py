@@ -9,7 +9,7 @@ class Ping:
     _target:str = None
     _count:int = None
     _interval:float = None
-    _ping_binary:str = "/bin/ping"
+    ping_binary:str = "/bin/ping"
     _parse_split:str = None
     _parse_response:object = None
     _parse_packets:object = None
@@ -25,16 +25,19 @@ class Ping:
     _rtt_mdev:float = None
 
 
-    def __init__(self, target:str, count:int = 20, interval:float = 0.2, binary:str = None):
+    def __init__(self, target:str, count:int = 20, interval:float = None, binary:str = None):
         self._target = target
         self._count = count
         self._interval = interval
         if binary:
-            self._ping_binary = binary
+            self.ping_binary = binary
         self.capture()
 
     def capture(self):
-        command = f"{self._ping_binary} -n -i {self._interval} -c {self._count} {self._target}"
+        if self._interval:
+            command = f"{self.ping_binary} -n -i {self._interval} -c {self._count} -W 1 {self._target}"
+        else:
+            command = f"{self.ping_binary} -n -A -c {self._count} -w 2 {self._target}"
         ping = subprocess.getoutput(command)
         self._identify(ping)
         (raw, summary) = ping.split(self._parse_split)
@@ -85,10 +88,7 @@ class Ping:
             self._rtt_min = float(match.groups()[0])
             self._rtt_avg = float(match.groups()[1])
             self._rtt_max = float(match.groups()[2])
-        
-        self._rtt_mdev = self._evaluate_busybox_rtt_mdev(raw)
 
-    def _evaluate_busybox_rtt_mdev(self, raw:list):
         # Evaluate raw data, to calculate mdev for RTT
         times = []
         for row in raw:
@@ -98,14 +98,13 @@ class Ping:
                 match = False
             if match:
                 times.append(float(match.groups()[4]))
-
         if len(times) > 0:
             mean_rtt = sum(times) / len(times)
             squared_derivations = [(time - mean_rtt)**2 for time in times]
 
-            return round((sum(squared_derivations) / len(squared_derivations))**0.5, 3)
+            self._rtt_mdev = round((sum(squared_derivations) / len(squared_derivations))**0.5, 3)
         else:
-            return None
+            self._rtt_mdev = None
 
     def _identify(self, input:object):
         if "\nrtt min/avg/max/mdev = " in input:
@@ -113,7 +112,6 @@ class Ping:
         elif "\nround-trip min/avg/max = " in input:
             self._type = "busybox"
         
-        # Tried using a dispatcher, but couldn't get it to work inside the class
         if self._type == "linux":
             self._re_setup_linux()
         elif self._type == "busybox":
@@ -170,16 +168,21 @@ class Ping:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Perform a ping test and report on results")
     parser.add_argument("target", help="The IP address or hostname to ping")
-    parser.add_argument("-c", "--count", type=int, default=20, help="Number of ping packets to send")
+    parser.add_argument("-c", "--count", type=int, default=50, help="Number of ping packets to send")
     parser.add_argument("-i", "--interval", type=float, default=0.2, help="Inter-packet interval, in seconds")
     parser.add_argument("-b", "--path", type=str, default="/bin/ping", help="Path to the ping binary")
     args = parser.parse_args()
 
     test = Ping(target=args.target, count=args.count, interval=args.interval, binary=args.path)
 
-    output = {'parameters': { 'target': args.target, 'count': args.count, 'interval': args.interval, 'binary': args.path},
-        'result': {'packets': { 'sent': test.packets_transmitted, 'received': test.packets_received, 'loss_percent': test.packet_loss},
-            'rtt': { 'minimum': test.rtt_min, 'average': test.rtt_avg, 'maximum': test.rtt_max, 'mdev': test.rtt_mdev},
-            'type': test.ping_type }}
+#    output = {'parameters': { 'target': args.target, 'count': args.count, 'interval': args.interval, 'binary': args.path},
+#        'result': {'packets': { 'sent': test.packets_transmitted, 'received': test.packets_received, 'loss_percent': test.packet_loss},
+#            'rtt': { 'minimum': test.rtt_min, 'average': test.rtt_avg, 'maximum': test.rtt_max, 'mdev': test.rtt_mdev},
+#            'type': test.ping_type }}
+
+    output = { 'target': args.target, 'count': args.count, 'interval': args.interval, 'binary': args.path,
+        'packets_sent': test.packets_transmitted, 'packets_received': test.packets_received, 'packet_loss': test.packet_loss,
+        'rtt_minimum': test.rtt_min, 'rtt_average': test.rtt_avg, 'rtt_maximum': test.rtt_max, 'rtt_mdev': test.rtt_mdev,
+        'type': test.ping_type }
 
     print(json.dumps(output))
